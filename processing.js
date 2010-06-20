@@ -38,7 +38,8 @@
        imageCache: { // by default we have an empty imageCache
          pending: 0 
        },
-       crispLines: false
+       crispLines: false,
+       pauseOnBlur: true
     };
 
     p.name = 'Processing.js Instance'; // Set Processing defaults / environment variables
@@ -3234,12 +3235,6 @@
       return new Date().getTime() - start;
     };
 
-    p.noLoop = function noLoop() {
-      doLoop = false;
-      loopStarted = false;
-      clearInterval(looping);
-    };
-
     p.redraw = function redraw() {
       var sec = (new Date().getTime() - timeSinceLastFPS) / 1000;
       framesSinceLastFPS++;
@@ -3275,6 +3270,12 @@
       inDraw = false;
     };
 
+    p.noLoop = function noLoop() {
+      doLoop = false;
+      loopStarted = false;
+      clearInterval(looping);
+    };
+
     p.loop = function loop() {
       if (loopStarted) {
         return;
@@ -3294,6 +3295,24 @@
 
       doLoop = true;
       loopStarted = true;
+    };
+
+    window.onfocus = function() {
+      // only turn looping back on if necessary
+      if (p.pjs.pauseOnBlur) {
+        if (doLoop) {
+          p.loop();
+        }
+      }
+    };
+
+    window.onblur = function() {
+      if (p.pjs.pauseOnBlur) {
+        if (doLoop && loopStarted) {
+          p.noLoop();
+          doLoop = true; // make sure to keep this true after the noLoop call
+        }
+      }
     };
 
     p.frameRate = function frameRate(aRate) {
@@ -10411,7 +10430,6 @@
         if (pair && pair.length === 2) {
           var key = clean(pair[0]);
           var value = clean(pair[1]);
-
           // A few directives require work beyond storying key/value pairings
           if (key === "preload") {
             var list = value.split(',');
@@ -10432,6 +10450,8 @@
             p.canvas.mozOpaque = value === "true";
           } else if (key === "crisp") {
             p.pjs.crispLines = value === "true";
+          } else if (key === "pauseOnBlur" || key === "pauseonblur") {
+            p.pjs.pauseOnBlur = value === "true";
           } else {
             p.pjs[key] = value;
           }
