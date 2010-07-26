@@ -304,6 +304,242 @@
     MAX_LIGHTS:         8
   };
 
+  var canvasDataCache = [undef, undef, undef]; // we need three for now
+  function getCanvasData(obj, w, h) {
+    var canvasData = canvasDataCache.shift();
+
+    if(canvasData === undef) {
+      canvasData = {};
+      canvasData.canvas = document.createElement("canvas");
+      canvasData.context = canvasData.canvas.getContext('2d');
+    }
+    canvasDataCache.push(canvasData);
+    var canvas = canvasData.canvas, context = canvasData.context,
+      width = w || obj.width, height = h || obj.height;
+    canvas.width = width; canvas.height = height;
+    if(!obj) {
+      context.clearRect(0, 0, width, height);
+    } else if("data" in obj) { // ImageData
+      context.putImageData(obj, 0, 0);
+    } else {
+      context.clearRect(0, 0, width, height);
+      context.drawImage(obj, 0, 0, width, height);
+    }
+    return canvasData;
+  }
+
+  var PImageCanvas = document.createElement("canvas");
+  var PImageContext = PImageCanvas.getContext("2d");
+
+  var PImage = function PImage(aWidth, aHeight, aFormat) {
+    this.get$2 = function(x,y) {
+      var offset = y * this.width * 4 + (x * 4);
+      return  (this.imageData.data[offset + 3] << 24) & PConstants.ALPHA_MASK | 
+              (this.imageData.data[offset + 0] << 16) & PConstants.RED_MASK   | 
+              (this.imageData.data[offset + 1] << 8) & PConstants.GREEN_MASK  | 
+              (this.imageData.data[offset + 2]) & PConstants.BLUE_MASK;
+    };
+
+    this.get$4 = function(x, y, w, h) {
+      var start = y * this.width * 4 + (x * 4);
+      var end = (y + h) * this.width * 4 + ((x + w) * 4);
+      var result = new PImage(w, h, PConstants.RGB);
+
+      for (var i = start, j = 0; i < end; i++, j++) {
+        result.imageData.data[j] = this.imageData.data[i];
+        if ((j+1) % (w*4) === 0) {
+          //completed one line, increment i by offset
+          i += (this.width - w) * 4;
+        }
+      }
+      return result;
+    };
+
+    this.get = function(x, y, w, h) {
+      if (!arguments.length) {
+        return this; // just return the PImage
+      } else if (arguments.length === 2) {
+        return this.get$2(x, y);
+      } else if (arguments.length === 4) {
+        return this.get$4(x, y, w, h);
+      }
+    };
+
+    this.set = function(x, y, colorInt) {
+      var c = [
+        (colorInt & PConstants.RED_MASK)   >>> 16, 
+        (colorInt & PConstants.GREEN_MASK) >>> 8,
+        (colorInt & PConstants.BLUE_MASK), 
+        (colorInt & PConstants.ALPHA_MASK) >>> 24];
+
+      var offset = y * this.width * 4 + (x * 4);
+      var data = this.imageData.data;
+      data[offset + 0] = c[0];
+      data[offset + 1] = c[1];
+      data[offset + 2] = c[2];
+      data[offset + 3] = c[3];
+    };
+
+    this.blend = function(srcImg, x, y, width, height, dx, dy, dwidth, dheight, MODE) {
+      if (arguments.length === 9) {
+        p.blend(this, srcImg, x, y, width, height, dx, dy, dwidth, dheight, this);
+      } else if (arguments.length === 10) {
+        p.blend(srcImg, x, y, width, height, dx, dy, dwidth, dheight, MODE, this);
+      }
+    };
+
+    this.copy = function(srcImg, sx, sy, swidth, sheight, dx, dy, dwidth, dheight) {
+      if (arguments.length === 8) {
+        p.blend(this, srcImg, sx, sy, swidth, sheight, dx, dy, dwidth, p.REPLACE, this);
+      } else if (arguments.length === 9) {
+        p.blend(srcImg, sx, sy, swidth, sheight, dx, dy, dwidth, dheight, p.REPLACE, this);
+      }
+    };
+
+    this.filter = function(mode, param) {
+      if (arguments.length === 2) {
+        p.filter(mode, param, this);
+      } else if (arguments.length === 1) {
+        // no param specified, send null to show its invalid
+        p.filter(mode, null, this);
+      }
+    };
+
+    this.save = function(file){
+      p.save(file,this);
+    };
+
+    this.resize = function(w, h) {
+      if (this.width !== 0 || this.height !== 0) {
+        // make aspect ratio if w or h is 0
+        if (w === 0 && h !== 0) {
+          w = this.width / this.height * h;
+        } else if (h === 0 && w !== 0) {
+          h = w / (this.width / this.height);
+        }
+        // put 'this.imageData' into a new canvas
+        var canvas = getCanvasData(this.imageData).canvas;
+        // pull imageData object out of canvas into ImageData object
+        var imageData = getCanvasData(canvas, w, h).context.getImageData(0, 0, w, h);
+        // set this as new pimage
+        this.fromImageData(imageData);
+      }
+    };
+
+    this.mask = function(mask) {
+      this._mask = undef;
+
+      if (mask instanceof PImage) {
+        if (mask.width === this.width && mask.height === this.height) {
+          this._mask = mask;
+        } else {
+          throw "mask must have the same dimensions as PImage.";
+        }
+      } else if (typeof mask === "object" && mask.constructor === Array) { // this is a pixel array
+        // mask pixel array needs to be the same length as this.pixels
+        // how do we update this for 0.9 this.imageData holding pixels ^^
+        // mask.constructor ? and this.pixels.length = this.imageData.data.length instead ?
+        if (this.pixels.length === mask.length) {
+          this._mask = mask;
+        } else {
+          throw "mask array must be the same length as PImage pixels array.";
+        }
+      }
+    };
+
+    // handle the sketch code for pixels[] and pixels.length
+    // parser code converts pixels[] to getPixels()
+    // or setPixels(), .length becomes getLength()
+    this.pixels = {
+      getLength: (function(aImg) {
+        return function() {
+          return aImg.imageData.data.length ? aImg.imageData.data.length/4 : 0;
+        };
+      }(this)),
+      getPixel: (function(aImg) {
+        return function(i) {
+          var offset = i*4;
+          return  (aImg.imageData.data[offset + 3] << 24) & PConstants.ALPHA_MASK | 
+                  (aImg.imageData.data[offset + 0] << 16) & PConstants.RED_MASK   | 
+                  (aImg.imageData.data[offset + 1] << 8) & PConstants.GREEN_MASK  | 
+                  (aImg.imageData.data[offset + 2]) & PConstants.BLUE_MASK;
+        };
+      }(this)),
+      setPixel: (function(aImg) {
+        return function(i,c) {
+          var offset = i * 4;
+          aImg.imageData.data[offset + 0] = (c & PConstants.RED_MASK)   >>> 16;
+          aImg.imageData.data[offset + 1] = (c & PConstants.GREEN_MASK) >>> 8;
+          aImg.imageData.data[offset + 2] = (c & PConstants.BLUE_MASK);
+          aImg.imageData.data[offset + 3] = (c & PConstants.ALPHA_MASK) >>> 24;
+        };
+      }(this)),
+      set: function(arr) {
+        for (var i = 0, aL = arr.length; i < aL; i++) {
+          this.setPixel(i, arr[i]);
+        }
+      }
+    };
+
+    // These are intentionally left blank for PImages, we work live with pixels and draw as necessary
+    this.loadPixels = function() {};
+
+    this.updatePixels = function() {};
+
+    this.toImageData = function() {
+      if (this.isRemote) { // Remote images cannot access imageData, send source image instead
+        return this.sourceImg;
+      } else {
+        var canvasData = getCanvasData(this.imageData);
+        return canvasData.context.getImageData(0, 0, this.width, this.height);
+      }
+    };
+
+    this.toDataURL = function() {
+      var canvasData = getCanvasData(this.imageData);
+      return canvasData.canvas.toDataURL();
+    };
+
+    this.fromImageData = function(canvasImg) {
+      this.width = canvasImg.width;
+      this.height = canvasImg.height;
+      this.imageData = canvasImg;
+      this.format = PConstants.ARGB;
+    };
+
+    this.fromHTMLImageData = function(htmlImg) {
+      // convert an <img> to a PImage
+      var canvasData = getCanvasData(htmlImg);
+      try {
+        var imageData = canvasData.context.getImageData(0, 0, htmlImg.width, htmlImg.height);
+        this.fromImageData(imageData);
+      } catch(e) {
+        if (htmlImg.width && htmlImg.height) {
+          this.isRemote = true;
+          this.width = htmlImg.width;
+          this.height = htmlImg.height;
+        }
+      }
+      this.sourceImg = htmlImg;
+    };
+
+    if (arguments.length === 1) {
+      // convert an <img> to a PImage
+      this.fromHTMLImageData(arguments[0]);
+    } else if (arguments.length === 2 || arguments.length === 3) {
+      this.width = aWidth || 1;
+      this.height = aHeight || 1;
+      this.imageData = PImageContext.createImageData(this.width, this.height);
+      this.format = (aFormat === PConstants.ARGB || aFormat === PConstants.ALPHA) ? aFormat : PConstants.RGB;
+    } else {
+      this.width = 0;
+      this.height = 0;
+      this.imageData = PImageContext.createImageData(1, 1);
+      this.format = PConstants.ARGB;
+    }
+  };
+
+
   var Processing = this.Processing = function Processing(curElement, aCode) {
 
     var p = this;
@@ -314,6 +550,8 @@
         p[constant] = PConstants[constant];
       }
     }
+
+    p.PImage = PImage;
 
     // PJS specific (non-p5) methods and properties to externalize
     p.externals = {
@@ -8562,181 +8800,6 @@
       return canvasData;
     }
 
-    var PImage = function PImage(aWidth, aHeight, aFormat) {
-      this.get = function(x, y, w, h) {
-        if (!arguments.length) {
-          return p.get(this);
-        } else if (arguments.length === 2) {
-          return p.get(x, y, this);
-        } else if (arguments.length === 4) {
-          return p.get(x, y, w, h, this);
-        }
-      };
-
-      this.set = function(x, y, c) {
-        p.set(x, y, c, this);
-      };
-
-      this.blend = function(srcImg, x, y, width, height, dx, dy, dwidth, dheight, MODE) {
-        if (arguments.length === 9) {
-          p.blend(this, srcImg, x, y, width, height, dx, dy, dwidth, dheight, this);
-        } else if (arguments.length === 10) {
-          p.blend(srcImg, x, y, width, height, dx, dy, dwidth, dheight, MODE, this);
-        }
-      };
-
-      this.copy = function(srcImg, sx, sy, swidth, sheight, dx, dy, dwidth, dheight) {
-        if (arguments.length === 8) {
-          p.blend(this, srcImg, sx, sy, swidth, sheight, dx, dy, dwidth, p.REPLACE, this);
-        } else if (arguments.length === 9) {
-          p.blend(srcImg, sx, sy, swidth, sheight, dx, dy, dwidth, dheight, p.REPLACE, this);
-        }
-      };
-
-      this.filter = function(mode, param) {
-        if (arguments.length === 2) {
-          p.filter(mode, param, this);
-        } else if (arguments.length === 1) {
-          // no param specified, send null to show its invalid
-          p.filter(mode, null, this);
-        }
-      };
-
-      this.save = function(file){
-        p.save(file,this);
-      };
-
-      this.resize = function(w, h) {
-        if (this.width !== 0 || this.height !== 0) {
-          // make aspect ratio if w or h is 0
-          if (w === 0 && h !== 0) {
-            w = this.width / this.height * h;
-          } else if (h === 0 && w !== 0) {
-            h = w / (this.width / this.height);
-          }
-          // put 'this.imageData' into a new canvas
-          var canvas = getCanvasData(this.imageData).canvas;
-          // pull imageData object out of canvas into ImageData object
-          var imageData = getCanvasData(canvas, w, h).context.getImageData(0, 0, w, h);
-          // set this as new pimage
-          this.fromImageData(imageData);
-        }
-      };
-
-      this.mask = function(mask) {
-        this._mask = undef;
-
-        if (mask instanceof PImage) {
-          if (mask.width === this.width && mask.height === this.height) {
-            this._mask = mask;
-          } else {
-            throw "mask must have the same dimensions as PImage.";
-          }
-        } else if (typeof mask === "object" && mask.constructor === Array) { // this is a pixel array
-          // mask pixel array needs to be the same length as this.pixels
-          // how do we update this for 0.9 this.imageData holding pixels ^^
-          // mask.constructor ? and this.pixels.length = this.imageData.data.length instead ?
-          if (this.pixels.length === mask.length) {
-            this._mask = mask;
-          } else {
-            throw "mask array must be the same length as PImage pixels array.";
-          }
-        }
-      };
-
-      // handle the sketch code for pixels[] and pixels.length
-      // parser code converts pixels[] to getPixels()
-      // or setPixels(), .length becomes getLength()
-      this.pixels = {
-        getLength: (function(aImg) {
-          return function() {
-            return aImg.imageData.data.length ? aImg.imageData.data.length/4 : 0;
-          };
-        }(this)),
-        getPixel: (function(aImg) {
-          return function(i) {
-            var offset = i*4;
-            return p.color.toInt(aImg.imageData.data[offset], aImg.imageData.data[offset+1],
-                                 aImg.imageData.data[offset+2], aImg.imageData.data[offset+3]);
-          };
-        }(this)),
-        setPixel: (function(aImg) {
-          return function(i,c) {
-            var offset = i*4;
-            aImg.imageData.data[offset] = (c & p.RED_MASK) >>> 16;
-            aImg.imageData.data[offset+1] = (c & p.GREEN_MASK) >>> 8;
-            aImg.imageData.data[offset+2] = (c & p.BLUE_MASK);
-            aImg.imageData.data[offset+3] = (c & p.ALPHA_MASK) >>> 24;
-          };
-        }(this)),
-        set: function(arr) {
-          for (var i = 0, aL = arr.length; i < aL; i++) {
-            this.setPixel(i, arr[i]);
-          }
-        }
-      };
-
-      // These are intentionally left blank for PImages, we work live with pixels and draw as necessary
-      this.loadPixels = function() {};
-
-      this.updatePixels = function() {};
-
-      this.toImageData = function() {
-        if (this.isRemote) { // Remote images cannot access imageData, send source image instead
-          return this.sourceImg;
-        } else {
-          var canvasData = getCanvasData(this.imageData);
-          return canvasData.context.getImageData(0, 0, this.width, this.height);
-        }
-      };
-
-      this.toDataURL = function() {
-        var canvasData = getCanvasData(this.imageData);
-        return canvasData.canvas.toDataURL();
-      };
-
-      this.fromImageData = function(canvasImg) {
-        this.width = canvasImg.width;
-        this.height = canvasImg.height;
-        this.imageData = canvasImg;
-        // changed for 0.9
-        this.format = p.ARGB;
-      };
-
-      this.fromHTMLImageData = function(htmlImg) {
-        // convert an <img> to a PImage
-        var canvasData = getCanvasData(htmlImg);
-        try {
-          var imageData = canvasData.context.getImageData(0, 0, htmlImg.width, htmlImg.height);
-          this.fromImageData(imageData);
-        } catch(e) {
-          if (htmlImg.width && htmlImg.height) {
-            this.isRemote = true;
-            this.width = htmlImg.width;
-            this.height = htmlImg.height;
-          }
-        }
-        this.sourceImg = htmlImg;
-      };
-
-      if (arguments.length === 1) {
-        // convert an <img> to a PImage
-        this.fromHTMLImageData(arguments[0]);
-      } else if (arguments.length === 2 || arguments.length === 3) {
-        this.width = aWidth || 1;
-        this.height = aHeight || 1;
-        // changed for 0.9
-        this.imageData = curContext.createImageData(this.width, this.height);
-        this.format = (aFormat === p.ARGB || aFormat === p.ALPHA) ? aFormat : p.RGB;
-      } else {
-        this.width = 0;
-        this.height = 0;
-        this.imageData = curContext.createImageData(1, 1);
-        this.format = p.ARGB;
-      }
-    };
-
-    p.PImage = PImage;
 
     try {
       // Opera createImageData fix
@@ -8817,55 +8880,23 @@
         return 0;
       }
     }
-    function get$3(x,y,img) {
-      // PImage.get(x,y) was called, return the color (int) at x,y of img
-      // changed in 0.9
-      var offset = y * img.width * 4 + (x * 4);
-      return p.color.toInt(img.imageData.data[offset],
-                         img.imageData.data[offset + 1],
-                         img.imageData.data[offset + 2],
-                         img.imageData.data[offset + 3]);
-    }
     function get$4(x, y, w, h) {
       // return a PImage of w and h from cood x,y of curContext
       var c = new PImage(w, h, p.RGB);
       c.fromImageData(curContext.getImageData(x, y, w, h));
       return c;
     }
-    function get$5(x, y, w, h, img) {
-      // PImage.get(x,y,w,h) was called, return x,y,w,h PImage of img
-      // changed for 0.9, offset start point needs to be *4
-      var start = y * img.width * 4 + (x*4);
-      var end = (y + h) * img.width * 4 + ((x + w) * 4);
-      var c = new PImage(w, h, p.RGB);
-      for (var i = start, j = 0; i < end; i++, j++) {
-        // changed in 0.9
-        c.imageData.data[j] = img.imageData.data[i];
-        if ((j+1) % (w*4) === 0) {
-          //completed one line, increment i by offset
-          i += (img.width - w) * 4;
-        }
-      }
-      return c;
-    }
 
     // Gets a single pixel or block of pixels from the current Canvas Context or a PImage
-    p.get = function get(x, y, w, h, img) {
+    p.get = function get(x, y, w, h) {
       // for 0 2 and 4 arguments use curContext, otherwise PImage.get was called
       if (arguments.length === 2) {
         return get$2(x, y);
       } else if (arguments.length === 0) {
         return get$0();
-      } else if (arguments.length === 5) {
-        return get$5(x, y, w, h, img);
       } else if (arguments.length === 4) {
         return get$4(x, y, w, h);
-      } else if (arguments.length === 3) {
-        return get$3(x, y, w);
-      } else if (arguments.length === 1) {
-        // PImage.get() was called, return the PImage
-        return x;
-      }
+      } 
     };
 
     // Creates a new Processing instance and passes it back for... processing
@@ -8938,15 +8969,6 @@
         }
       }
     }
-    function set$4(x, y, obj, img) {
-      var c = p.color.toArray(obj);
-      var offset = y * img.width * 4 + (x*4);
-      var data = img.imageData.data;
-      data[offset] = c[0];
-      data[offset+1] = c[1];
-      data[offset+2] = c[2];
-      data[offset+3] = c[3];
-    }
     // Paints a pixel array into the canvas
     p.set = function set(x, y, obj, img) {
       var color, oldFill;
@@ -8957,10 +8979,7 @@
         } else if (obj instanceof PImage) {
           p.image(obj, x, y);
         }
-      } else if (arguments.length === 4) {
-        // PImage.set(x,y,c) was called, set coordinate x,y color to c of img
-        set$4(x, y, obj, img);
-      }
+      } 
     };
     p.imageData = {};
 
