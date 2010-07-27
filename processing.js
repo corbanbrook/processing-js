@@ -305,63 +305,61 @@
   };
 
   var canvasDataCache = [undef, undef, undef]; // we need three for now
+
   function getCanvasData(obj, w, h) {
     var canvasData = canvasDataCache.shift();
 
-    if(canvasData === undef) {
+    if (canvasData === undef) {
       canvasData = {};
       canvasData.canvas = document.createElement("canvas");
       canvasData.context = canvasData.canvas.getContext('2d');
     }
+
     canvasDataCache.push(canvasData);
+    
     var canvas = canvasData.canvas, context = canvasData.context,
-      width = w || obj.width, height = h || obj.height;
+        width = w || obj.width, height = h || obj.height;
+    
     canvas.width = width; canvas.height = height;
-    if(!obj) {
+
+    if (!obj) {
       context.clearRect(0, 0, width, height);
-    } else if("data" in obj) { // ImageData
+    } else if ("data" in obj) { // ImageData
       context.putImageData(obj, 0, 0);
     } else {
       context.clearRect(0, 0, width, height);
       context.drawImage(obj, 0, 0, width, height);
     }
+
     return canvasData;
   }
 
-  var PImageCanvas = document.createElement("canvas");
-  var PImageContext = PImageCanvas.getContext("2d");
+  // General utility 2d context used for creating ImageData objects.
+  var Generic2dContext = document.createElement("canvas").getContext("2d");
 
   var PImage = function PImage(aWidth, aHeight, aFormat) {
-    this.get$2 = function(x,y) {
-      var offset = y * this.width * 4 + (x * 4);
-      return  (this.imageData.data[offset + 3] << 24) & PConstants.ALPHA_MASK | 
-              (this.imageData.data[offset + 0] << 16) & PConstants.RED_MASK   | 
-              (this.imageData.data[offset + 1] << 8) & PConstants.GREEN_MASK  | 
-              (this.imageData.data[offset + 2]) & PConstants.BLUE_MASK;
-    };
-
-    this.get$4 = function(x, y, w, h) {
-      var start = y * this.width * 4 + (x * 4);
-      var end = (y + h) * this.width * 4 + ((x + w) * 4);
-      var result = new PImage(w, h, PConstants.RGB);
-
-      for (var i = start, j = 0; i < end; i++, j++) {
-        result.imageData.data[j] = this.imageData.data[i];
-        if ((j+1) % (w*4) === 0) {
-          //completed one line, increment i by offset
-          i += (this.width - w) * 4;
-        }
-      }
-      return result;
-    };
-
     this.get = function(x, y, w, h) {
       if (!arguments.length) {
         return this; // just return the PImage
       } else if (arguments.length === 2) {
-        return this.get$2(x, y);
+        var offset = y * this.width * 4 + (x * 4);
+        return  (this.imageData.data[offset + 3] << 24) & PConstants.ALPHA_MASK | 
+                (this.imageData.data[offset + 0] << 16) & PConstants.RED_MASK   | 
+                (this.imageData.data[offset + 1] << 8) & PConstants.GREEN_MASK  | 
+                (this.imageData.data[offset + 2]) & PConstants.BLUE_MASK;
       } else if (arguments.length === 4) {
-        return this.get$4(x, y, w, h);
+        var start = y * this.width * 4 + (x * 4);
+        var end = (y + h) * this.width * 4 + ((x + w) * 4);
+        var result = new PImage(w, h, PConstants.RGB);
+
+        for (var i = start, j = 0; i < end; i++, j++) {
+          result.imageData.data[j] = this.imageData.data[i];
+          if ((j+1) % (w*4) === 0) {
+            //completed one line, increment i by offset
+            i += (this.width - w) * 4;
+          }
+        }
+        return result;
       }
     };
 
@@ -529,19 +527,18 @@
     } else if (arguments.length === 2 || arguments.length === 3) {
       this.width = aWidth || 1;
       this.height = aHeight || 1;
-      this.imageData = PImageContext.createImageData(this.width, this.height);
+      this.imageData = Generic2dContext.createImageData(this.width, this.height);
       this.format = (aFormat === PConstants.ARGB || aFormat === PConstants.ALPHA) ? aFormat : PConstants.RGB;
     } else {
       this.width = 0;
       this.height = 0;
-      this.imageData = PImageContext.createImageData(1, 1);
+      this.imageData = Generic2dContext.createImageData(1, 1);
       this.format = PConstants.ARGB;
     }
   };
 
 
   var Processing = this.Processing = function Processing(curElement, aCode) {
-
     var p = this;
 
     // Include PConstants
@@ -8776,31 +8773,6 @@
       }
     };
 
-    var canvasDataCache = [undef, undef, undef]; // we need three for now
-    function getCanvasData(obj, w, h) {
-      var canvasData = canvasDataCache.shift();
-
-      if(canvasData === undef) {
-        canvasData = {};
-        canvasData.canvas = document.createElement("canvas");
-        canvasData.context = canvasData.canvas.getContext('2d');
-      }
-      canvasDataCache.push(canvasData);
-      var canvas = canvasData.canvas, context = canvasData.context,
-        width = w || obj.width, height = h || obj.height;
-      canvas.width = width; canvas.height = height;
-      if(!obj) {
-        context.clearRect(0, 0, width, height);
-      } else if("data" in obj) { // ImageData
-        context.putImageData(obj, 0, 0);
-      } else {
-        context.clearRect(0, 0, width, height);
-        context.drawImage(obj, 0, 0, width, height);
-      }
-      return canvasData;
-    }
-
-
     try {
       // Opera createImageData fix
       if (! ("createImageData" in CanvasRenderingContext2D.prototype)) {
@@ -8811,7 +8783,6 @@
     } catch(e) {}
 
     p.createImage = function createImage(w, h, mode) {
-      // changed for 0.9
       return new PImage(w,h,mode);
     };
 
